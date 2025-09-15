@@ -1,0 +1,451 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>Subsolar Map — RA/Dec → Subsolar Points</title>
+
+<!-- Leaflet CSS -->
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
+  integrity="sha512-something" crossorigin=""/>
+
+<!-- Simple UI styling -->
+<style>
+  :root{
+    --accent:#0d6efd;
+    --muted:#6c757d;
+    --bg:#f7f9fc;
+    --card:#fff;
+  }
+  html,body,#map{height:100%;margin:0}
+  body{font-family:Inter,Segoe UI,Roboto,Arial; background:var(--bg); color:#111}
+  .topbar{display:flex;gap:12px;align-items:center;padding:10px;background:var(--card);box-shadow:0 2px 6px rgba(10,10,10,0.06)}
+  .container{display:flex;height:calc(100vh - 56px)}
+  .sidebar{width:360px;min-width:300px;background:var(--card);padding:16px;box-shadow:2px 0 6px rgba(10,10,10,0.06);overflow:auto}
+  #map{flex:1}
+  label{display:block;margin-top:10px;font-size:13px;color:var(--muted)}
+  input[type=text], select, textarea{
+    width:100%;padding:8px;border-radius:6px;border:1px solid #e6e9ef;background:#fff;margin-top:6px;
+    box-sizing:border-box;font-size:14px
+  }
+  button{background:var(--accent);color:#fff;padding:8px 12px;border-radius:8px;border:0;cursor:pointer;margin-top:10px}
+  .muted{color:var(--muted);font-size:13px}
+  .row{display:flex;gap:8px}
+  .small{font-size:12px;padding:6px}
+  .status{margin-top:8px;font-size:13px}
+  .note{margin-top:8px;color:#444;font-size:13px}
+  .time-pill{background:#fff;padding:4px 8px;border-radius:10px;border:1px solid #eee}
+</style>
+</head>
+<body>
+  <div class="topbar">
+    <h3 style="margin:0">Subsolar Map — RA/Dec → Subsolar (0–23h)</h3>
+    <div style="margin-left:auto" class="muted">UX by you • JS by me</div>
+  </div>
+
+  <div class="container">
+    <aside class="sidebar">
+      <strong>1) 데이터 원본</strong>
+      <div class="muted">웹에서 자동 파싱 시도 (KASI 페이지)</div>
+
+      <label>Source URL</label>
+      <input id="srcUrl" type="text" value="https://astro.kasi.re.kr/life/pageView/10" />
+
+      <label>Table container selector (CSS)</label>
+      <input id="tableSelector" type="text" value="#sun-height-table" />
+
+      <div style="display:flex;gap:8px">
+        <button id="btnFetch">Fetch & Plot</button>
+        <button id="btnClear" style="background:#6c757d">Clear</button>
+      </div>
+
+      <div class="status" id="status">Status: waiting</div>
+
+      <hr />
+
+      <strong>2) 수동 입력 / 붙여넣기 (CORS 실패 시)</strong>
+      <div class="muted">테이블 HTML 또는 CSV (시간,RA,Dec 열 포함)를 붙여넣을 수 있습니다.</div>
+      <label>Paste table HTML or CSV</label>
+      <textarea id="manualInput" rows="6" placeholder="Paste the table HTML or CSV here"></textarea>
+      <div style="display:flex;gap:8px">
+        <button id="btnParseManual">Parse & Plot</button>
+        <button id="btnSample" style="background:#198754">Load sample RA/Dec (0-23)</button>
+      </div>
+
+      <hr />
+      <strong>3) Options</strong>
+      <label>Marker cluster</label>
+      <select id="clusterOpt">
+        <option value="1">Enabled</option>
+        <option value="0">Disabled</option>
+      </select>
+
+      <label>Label format</label>
+      <select id="labelFormat">
+        <option value="time">Time only (e.g. 0h)</option>
+        <option value="time+latlon">Time + lat,lon</option>
+      </select>
+
+      <div class="note">
+        Tip: If automatic fetch fails due to CORS, copy the table HTML from the source page and paste it into the box above, or enable a server-side proxy.
+      </div>
+
+      <hr />
+      <div style="font-size:13px">
+        <strong>How it works</strong>
+        <ol>
+          <li>Parse hourly RA/Dec (per-row)</li>
+          <li>Convert RA→deg, Dec→deg</li>
+          <li>Compute GMST from the timestamp in page (or assume KST date) → subsolar lon = RA_deg - GMST_deg</li>
+          <li>Plot on Leaflet</li>
+        </ol>
+      </div>
+
+      <div style="margin-top:12px;font-size:12px;color:var(--muted)">
+        Note on CORS: Direct cross-site fetch may be blocked. Two workarounds: <br>
+        1) Use a simple proxy (e.g. your server or serverless function) to fetch the KASI page. <br>
+        2) Use the manual paste box.
+      </div>
+
+    </aside>
+
+    <div id="map"></div>
+  </div>
+
+  <!-- Leaflet JS -->
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" integrity="sha512-something" crossorigin=""></script>
+
+  <!-- Leaflet MarkerCluster (optional, for many markers) -->
+  <link rel="stylesheet" href="https://unpkg.com/leaflet.markercluster@1.5.3/dist/MarkerCluster.Default.css" />
+  <script src="https://unpkg.com/leaflet.markercluster@1.5.3/dist/leaflet.markercluster.js"></script>
+
+  <script>
+  // ---------- Utility: parse DMS strings to decimal ----------
+  function parseRAtoDeg(text){
+    // Accepts "hh mm ss.ss" or "hh:mm:ss" or "hh mm ss" possibly with extra spaces
+    text = (text||"").trim().replace(/[^\d.\-: ]+/g,' ');
+    let parts = text.split(/[:\s]+/).filter(Boolean);
+    if(parts.length<1) return NaN;
+    let h = parseFloat(parts[0]) || 0;
+    let m = parseFloat(parts[1]) || 0;
+    let s = parseFloat(parts[2]) || 0;
+    return (h + m/60 + s/3600) * 15.0;
+  }
+  function parseDMStoDeg(text){
+    // Accepts "±dd mm ss.ss" or "dd:mm:ss" with optional sign
+    text = (text||"").trim();
+    let sign = 1;
+    if(text.startsWith('-')){ sign = -1; text = text.slice(1); }
+    text = text.replace(/[^\d.\-: ]+/g,' ');
+    let parts = text.split(/[:\s]+/).filter(Boolean);
+    if(parts.length<1) return NaN;
+    let d = parseFloat(parts[0]) || 0;
+    let m = parseFloat(parts[1]) || 0;
+    let s = parseFloat(parts[2]) || 0;
+    return sign * (Math.abs(d) + m/60 + s/3600);
+  }
+
+  // ---------- Astronomical helper functions ----------
+  // JD from JS Date (UTC)
+  function dateToJD(date){
+    // date must be JS Date in UTC
+    let Y = date.getUTCFullYear();
+    let M = date.getUTCMonth()+1;
+    let D = date.getUTCDate();
+    let H = date.getUTCHours();
+    let Min = date.getUTCMinutes();
+    let S = date.getUTCSeconds() + date.getUTCMilliseconds()/1000;
+    let day = D + (H + (Min + S/60)/60)/24;
+    if(M <= 2){ Y -= 1; M += 12; }
+    let A = Math.floor(Y/100);
+    let B = 2 - A + Math.floor(A/4);
+    let JD = Math.floor(365.25*(Y+4716)) + Math.floor(30.6001*(M+1)) + day + B - 1524.5;
+    return JD;
+  }
+
+  // GMST in degrees (approx) from JD
+  function jdToGMSTdeg(JD){
+    // Uses approximation (Meeus)
+    let T = (JD - 2451545.0)/36525.0;
+    let gmst = 280.46061837 + 360.98564736629*(JD - 2451545.0) + 0.000387933*T*T - T*T*T/38710000.0;
+    gmst = ((gmst % 360) + 360) % 360;
+    return gmst;
+  }
+
+  // Normalize lon to [-180,180)
+  function normLon(lon){
+    lon = ((lon + 180) % 360 + 360) % 360 - 180;
+    return lon;
+  }
+
+  // Compute subsolar lat/lon from RA_deg, Dec_deg and JD
+  function subsolarFromRADec(RA_deg, Dec_deg, JD){
+    let gmst = jdToGMSTdeg(JD); // in degrees
+    // Subsolar longitude = RA_deg - GMST (both in degrees) ; convert RA (ICRS) to apparent(?) - approximation
+    let lon = normLon(RA_deg - gmst);
+    let lat = Dec_deg;
+    return {lat: lat, lon: lon, gmst: gmst};
+  }
+
+  // ---------- Map init ----------
+  const map = L.map('map', {zoomControl:true}).setView([0,0],2);
+  const osm = L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+    attribution: '© OpenStreetMap contributors'
+  }).addTo(map);
+
+  let clusterGroup = L.markerClusterGroup();
+  let markerLayer = L.layerGroup().addTo(map);
+
+  // ---------- Main parse & plot ----------
+  async function fetchAndPlot(){
+    setStatus('Fetching source...');
+    clearMap();
+
+    const src = document.getElementById('srcUrl').value.trim();
+    const selector = document.getElementById('tableSelector').value.trim() || '#sun-height-table';
+
+    // Try direct fetch
+    try{
+      setStatus('Attempting direct fetch (may be blocked by CORS)...');
+      let res = await fetch(src);
+      if(!res.ok) throw new Error('Fetch failed: '+res.status);
+      let html = await res.text();
+      parseAndPlotFromHTML(html, selector);
+      setStatus('Success: parsed and plotted from remote page.');
+      return;
+    }catch(err){
+      console.warn('Direct fetch failed:', err);
+      setStatus('Direct fetch failed (CORS?). Trying public proxy...');
+    }
+
+    // Try a public CORS proxy (best-effort). You may replace with your own proxy endpoint.
+    const corsProxy = 'https://api.allorigins.win/raw?url=';
+    try{
+      setStatus('Trying AllOrigins proxy...');
+      let res = await fetch(corsProxy + encodeURIComponent(src));
+      if(!res.ok) throw new Error('Proxy fetch failed: '+res.status);
+      let html = await res.text();
+      parseAndPlotFromHTML(html, selector);
+      setStatus('Success: parsed via proxy and plotted.');
+      return;
+    }catch(err){
+      console.warn('Proxy fetch failed:', err);
+      setStatus('Proxy fetch failed. Please paste the table HTML or CSV in the manual box and click Parse.');
+      return;
+    }
+  }
+
+  function parseAndPlotFromHTML(html, selector){
+    // create DOM
+    const parser = new DOMParser();
+    const doc = parser.parseFromString(html, 'text/html');
+    const container = doc.querySelector(selector);
+    if(!container){
+      setStatus('Could not find table container with selector: ' + selector);
+      return;
+    }
+
+    // Try to locate table element inside container
+    const table = container.querySelector('table') || container;
+    if(!table || table.tagName.toLowerCase() !== 'table'){
+      setStatus('No <table> found inside container.');
+      return;
+    }
+
+    // Parse header to find RA and Dec column indices (look for '적경' / '적위' keywords)
+    const headers = Array.from(table.querySelectorAll('thead th, tr:first-child th, tr:first-child td')).map(h=>h.textContent.trim());
+    let raIdx = -1, decIdx = -1, timeIdx = -1;
+    headers.forEach((h,i)=>{
+      const t = h.replace(/\s+/g,'');
+      if(/적경|RA|RightAscension|RightAsc/.test(h) || /RA/i.test(h)) raIdx = i;
+      if(/적위|Dec|Declination/.test(h) || /Dec/i.test(h)) decIdx = i;
+      if(/시간|Time|Hour|시/.test(h) || /\btime\b/i.test(h)) timeIdx = i;
+    });
+
+    // Fallback: try heuristic column positions (many pages list: time, az, alt, RA, Dec)
+    if(raIdx===-1 || decIdx===-1){
+      // Try find columns by scanning a sample row for RA-like strings (hh mm ...)
+      const firstRow = table.querySelector('tbody tr') || table.querySelector('tr:nth-of-type(2)');
+      if(firstRow){
+        const cells = Array.from(firstRow.querySelectorAll('td,th'));
+        cells.forEach((c,i)=>{
+          const txt = (c.textContent||'').trim();
+          if(/^\d{1,2}\s*[hH:]|\d{1,2}\s+\d{1,2}\s+\d{1,2}/.test(txt) || /:\d{2}:\d{2}/.test(txt)){
+            // looks like RA
+            if(raIdx===-1) raIdx = i;
+          }
+          if(/^\+?\-?\d{1,2}\s*[d°:]|\d{1,2}\s+\d{1,2}\s+\d{1,2}/.test(txt) && raIdx!==i){
+            if(decIdx===-1) decIdx = i;
+          }
+          if(/\b0|1|2?\d\s*시|\bHour\b/i.test(txt) && timeIdx===-1){
+            timeIdx = i;
+          }
+        });
+      }
+    }
+
+    if(raIdx===-1 || decIdx===-1){
+      setStatus('Failed to detect RA/Dec columns automatically. Please paste CSV or the HTML table into the manual input box.');
+      return;
+    }
+
+    // Collect rows
+    const rows = Array.from(table.querySelectorAll('tbody tr')).length ? Array.from(table.querySelectorAll('tbody tr')) : Array.from(table.querySelectorAll('tr')).slice(1);
+    const points = [];
+    // For JD calculation we need a date; try to glean the date from page or default to today (KST)
+    // We'll assume the table is for "today" in KST. User can input date in future improvement.
+    const now = new Date();
+    // We'll use the current KST date (UTC +9)
+    const kstOffset = 9 * 60; // minutes
+    const kst = new Date(now.getTime() + (kstOffset - now.getTimezoneOffset())*60000);
+    // build a base date at 0h KST
+    const baseKst0 = new Date(Date.UTC(kst.getUTCFullYear(), kst.getUTCMonth(), kst.getUTCDate(), 0,0,0));
+    // main loop
+    rows.forEach((tr,idx)=>{
+      const cells = Array.from(tr.querySelectorAll('td,th'));
+      if(cells.length <= Math.max(raIdx,decIdx)) return;
+      const raTxt = (cells[raIdx].textContent || '').trim();
+      const decTxt = (cells[decIdx].textContent || '').trim();
+      let timeTxt = timeIdx>=0 && cells[timeIdx] ? (cells[timeIdx].textContent||'').trim() : String(idx); // fallback to row index
+      // attempt to parse hour from timeTxt
+      let hour = parseInt((timeTxt.match(/\d{1,2}/)||[idx])[0],10) || idx;
+      // construct KST Date for this hour
+      const kstDate = new Date(baseKst0.getTime() + hour*3600000);
+      // convert KST to UTC for JD calculation
+      const utcDate = new Date(kstDate.getTime() - (9*3600000));
+      const JD = dateToJD(utcDate);
+      const raDeg = parseRAtoDeg(raTxt);
+      const decDeg = parseDMStoDeg(decTxt);
+      if(isNaN(raDeg) || isNaN(decDeg)) return;
+      const sub = subsolarFromRADec(raDeg, decDeg, JD);
+      points.push({
+        hour: hour,
+        labelTime: timeTxt,
+        raTxt, decTxt,
+        raDeg, decDeg,
+        lat: sub.lat,
+        lon: sub.lon,
+        JD, gmst: sub.gmst
+      });
+    });
+
+    if(points.length===0){
+      setStatus('No valid RA/Dec rows parsed. Try manual paste or check selector.');
+      return;
+    }
+    plotPoints(points);
+  }
+
+  // Manual parse (CSV or HTML)
+  function parseAndPlotManual(text){
+    clearMap();
+    setStatus('Parsing manual input...');
+    text = text.trim();
+    // Heuristic: if contains "<table" treat as HTML
+    if(text.toLowerCase().includes('<table')){
+      const parser = new DOMParser();
+      const doc = parser.parseFromString(text, 'text/html');
+      const table = doc.querySelector('table');
+      if(!table){ setStatus('No table found in pasted HTML'); return; }
+      parseAndPlotFromHTML(table.outerHTML, 'table');
+      return;
+    }
+    // Else assume CSV: try to parse lines, detect RA/Dec columns
+    const lines = text.split(/\r?\n/).map(l=>l.trim()).filter(Boolean);
+    if(lines.length===0){ setStatus('Input empty'); return; }
+    // split by comma or tab
+    const rows = lines.map(l => l.split(/\t|,/).map(c=>c.trim()));
+    // header detection
+    const header = rows[0].map(h=>h.replace(/\s+/g,'').toLowerCase());
+    let raIdx = header.findIndex(h=>/ra|적경|right/i.test(h));
+    let decIdx = header.findIndex(h=>/dec|적위|declin/i.test(h));
+    let timeIdx = header.findIndex(h=>/time|hour|시|시간/i.test(h));
+    if(raIdx===-1 || decIdx===-1){
+      // try columns by heuristic
+      for(let i=0;i<rows[0].length;i++){
+        if(rows[1] && /^\d{1,2}[:\s]\d{1,2}[:\s]\d{1,2}/.test(rows[1][i])) raIdx=i;
+        if(rows[1] && /^[\+\-]?\d{1,2}[:\s]\d{1,2}[:\s]\d{1,2}/.test(rows[1][i])) decIdx=i;
+      }
+    }
+    const points=[];
+    const baseKst0 = new Date();
+    for(let r=1;r<rows.length;r++){
+      const cells=rows[r];
+      const raTxt = cells[raIdx]||'';
+      const decTxt = cells[decIdx]||'';
+      let hour = timeIdx>=0 ? parseInt((cells[timeIdx].match(/\d{1,2}/)||['0'])[0],10) : r-1;
+      const kstDate = new Date(Date.UTC(baseKst0.getUTCFullYear(), baseKst0.getUTCMonth(), baseKst0.getUTCDate(), hour,0,0));
+      const JD = dateToJD(new Date(kstDate.getTime() - 9*3600000));
+      const raDeg = parseRAtoDeg(raTxt);
+      const decDeg = parseDMStoDeg(decTxt);
+      if(isNaN(raDeg)||isNaN(decDeg)) continue;
+      const sub = subsolarFromRADec(raDeg, decDeg, JD);
+      points.push({hour, labelTime:cells[timeIdx]||String(hour), raTxt, decTxt, raDeg, decDeg, lat:sub.lat, lon:sub.lon, JD, gmst:sub.gmst});
+    }
+    if(points.length===0){ setStatus('No valid rows in manual input'); return; }
+    plotPoints(points);
+  }
+
+  function plotPoints(points){
+    const useCluster = document.getElementById('clusterOpt').value === '1';
+    // decide zoom / fit
+    const latlngs = points.map(p=>[p.lat, p.lon]);
+    if(latlngs.length>0) map.fitBounds(latlngs, {padding:[40,40]});
+    // choose layer
+    let targetLayer = markerLayer;
+    markerLayer.clearLayers();
+    clusterGroup.clearLayers();
+    const labelFormat = document.getElementById('labelFormat').value;
+    points.forEach(p=>{
+      const label = labelFormat==='time' ? `${p.labelTime}` : `${p.labelTime} — ${p.lat.toFixed(4)}, ${p.lon.toFixed(4)}`;
+      const marker = L.circleMarker([p.lat, p.lon], {radius:8,fill:true,fillOpacity:0.9, color:'#0d6efd', weight:1});
+      marker.bindPopup(`<strong>${label}</strong><br>RA: ${p.raTxt} (${p.raDeg.toFixed(4)}°)<br>Dec: ${p.decTxt} (${p.decDeg.toFixed(4)}°)<br>GMST: ${p.gmst.toFixed(4)}°`);
+      marker.bindTooltip(label, {permanent:true, direction:'top', offset:[0,-10], className:'time-pill'});
+      if(useCluster){
+        clusterGroup.addLayer(marker);
+      }else{
+        markerLayer.addLayer(marker);
+      }
+    });
+    if(useCluster){
+      map.addLayer(clusterGroup);
+    }else{
+      if(map.hasLayer(clusterGroup)) map.removeLayer(clusterGroup);
+      map.addLayer(markerLayer);
+    }
+    setStatus(`Plotted ${points.length} points.`);
+  }
+
+  function clearMap(){
+    markerLayer.clearLayers();
+    clusterGroup.clearLayers();
+  }
+
+  function setStatus(txt){
+    document.getElementById('status').textContent = 'Status: ' + txt;
+  }
+
+  // ---------- UI wiring ----------
+  document.getElementById('btnFetch').addEventListener('click', fetchAndPlot);
+  document.getElementById('btnClear').addEventListener('click', ()=>{clearMap(); setStatus('Cleared map.');});
+  document.getElementById('btnParseManual').addEventListener('click', ()=>{ parseAndPlotManual(document.getElementById('manualInput').value); });
+  document.getElementById('btnSample').addEventListener('click', loadSample);
+
+  function loadSample(){
+    // simple sample: hourly RA/Dec approximate values (fake demo)
+    let sampleLines = ['time,RA,Dec'];
+    for(let h=0;h<24;h++){
+      // sample RA increases ~1h per hour (not physically accurate) and Dec small oscillation
+      const ra_h = (11 + h*0.04).toFixed(0) + ' ' + (30 + h%60) + ' ' + (10 + h%60);
+      const dec_d = (2 + Math.sin(h/24*2*Math.PI)*5).toFixed(0) + ' ' + (10) + ' ' + (20);
+      sampleLines.push(`${h},${ra_h},${dec_d}`);
+    }
+    document.getElementById('manualInput').value = sampleLines.join('\n');
+    setStatus('Sample loaded into manual input. Click Parse & Plot.');
+  }
+
+  // initial small hint
+  setStatus('Ready. Enter source url and click Fetch & Plot, or paste table HTML/CSV and Parse.');
+  </script>
+</body>
+</html>
