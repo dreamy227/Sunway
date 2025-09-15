@@ -429,7 +429,7 @@
             // 정보 패널 업데이트
             document.getElementById('currentTime').textContent = 
                 `${localDateTime.toLocaleDateString('ko-KR')} ${localDateTime.toLocaleTimeString('ko-KR')}`;
-            document.getElementById('rightAscension').textContent = degreeToHMS(subSolarPoint.rightAscension);
+            document.getElementById('rightAscension').textContent = degreeToDMS(subSolarPoint.rightAscension);
             document.getElementById('declination').textContent = degreeToDMS(subSolarPoint.declination);
             document.getElementById('subSolarPoint').textContent = 
                 `${subSolarPoint.latitude.toFixed(3)}°N, ${subSolarPoint.longitude.toFixed(3)}°E`;
@@ -478,7 +478,7 @@
                         <div class="popup-data">
                             <div><strong>위도:</strong> ${subSolarPoint.latitude.toFixed(4)}°</div>
                             <div><strong>경도:</strong> ${subSolarPoint.longitude.toFixed(4)}°</div>
-                            <div><strong>적경:</strong> ${degreeToHMS(subSolarPoint.rightAscension)}</div>
+                            <div><strong>적경:</strong> ${degreeToDMS(subSolarPoint.rightAscension)}</div>
                             <div><strong>적위:</strong> ${degreeToDMS(subSolarPoint.declination)}</div>
                             <div><strong>시간:</strong> ${localDateTime.toLocaleString('ko-KR')}</div>
                             <div><strong>UTC:</strong> ${utcDateTime.toISOString().slice(0, 19).replace('T', ' ')}</div>
