@@ -143,15 +143,12 @@
             pointer-events: none;
             z-index: 999;
             display: none;
-            background: rgba(255, 255, 255, 0.1);
-            border-radius: 50%;
-            padding: 5px;
         }
 
         .arrow {
             width: 60px;
             height: 60px;
-            background: rgba(255, 215, 0, 0.95);
+            background: rgba(255, 215, 0, 0.9);
             border: 3px solid #fff;
             border-radius: 50%;
             display: flex;
@@ -159,20 +156,8 @@
             justify-content: center;
             font-size: 24px;
             color: #333;
-            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.4);
+            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
             animation: pulse 2s infinite;
-            transition: transform 0.5s ease;
-            font-weight: bold;
-            /* transform 초기값 설정 */
-            transform: rotate(0deg);
-        }
-
-        /* 펄스 애니메이션과 transform이 충돌하지 않도록 분리 */
-        .arrow::before {
-            content: '➤';
-            display: block;
-            transform: rotate(0deg);
-            transition: transform 0.5s ease;
         }
 
         .info-panel {
@@ -333,7 +318,7 @@
             </div>
             <div class="control-group">
                 <label>주소 검색</label>
-                <input type="text" id="addressInput" class="address-input" placeholder="도로명 주소 입력">
+                <input type="text" id="addressInput" class="address-input" placeholder="주소를 입력하세요 (예: 서울시 강남구)">
             </div>
             <button class="btn secondary" onclick="searchAddress()">🔍 주소 검색</button>
             <button class="btn" onclick="updateSolarPosition()">📍 태양 위치 업데이트</button>
@@ -375,95 +360,44 @@
         </div>
     </div>
 
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.js"></script>
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
     <script>
         let map;
         let solarMarker;
         let addressMarker;
         let animationInterval;
         let isAnimating = false;
-        let mapInitialized = false;
 
-        // Leaflet 라이브러리 로드 확인 및 재시도
-        function checkLeafletAndInit() {
-            if (typeof L !== 'undefined') {
-                console.log('Leaflet 라이브러리 로드 성공!');
-                if (!mapInitialized) {
-                    initMap();
-                    mapInitialized = true;
-                }
-            } else {
-                console.log('Leaflet 라이브러리 로드 대기 중...');
-                // 더 긴 대기 시간과 여러 번 재시도
-                setTimeout(checkLeafletAndInit, 500);
-            }
-        }
-
-        // 지도 초기화 - 더 안정적인 버전
+        // 지도 초기화 - Leaflet 라이브러리 로드 확인
         function initMap() {
             try {
-                console.log('지도 초기화 시작...');
-                
                 map = L.map('map', {
                     center: [35.5, 127.5],
                     zoom: 2,
                     maxZoom: 18,
-                    minZoom: 1,
-                    zoomControl: true,
-                    attributionControl: true
+                    minZoom: 1
                 });
 
-                // 여러 타일 서버 옵션 (하나가 실패하면 다른 것 사용)
-                const tileUrls = [
-                    'https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png',
-                    'https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',
-                    'https://cartodb-basemaps-{s}.global.ssl.fastly.net/dark_all/{z}/{x}/{y}.png'
-                ];
-
-                let tileLayer = L.tileLayer(tileUrls[0], {
+                // 어두운 테마의 지도 타일
+                L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', {
                     attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors &copy; <a href="https://carto.com/attributions">CARTO</a>',
                     subdomains: 'abcd',
                     maxZoom: 20
                 }).addTo(map);
 
-                // 타일 로드 오류 시 대체 타일 사용
-                tileLayer.on('tileerror', function() {
-                    console.log('첫 번째 타일 서버 오류, 대체 서버 사용');
-                    map.removeLayer(tileLayer);
-                    tileLayer = L.tileLayer(tileUrls[1], {
-                        attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors',
-                        maxZoom: 18
-                    }).addTo(map);
-                });
+                // 지도 줌 이벤트 리스너 추가
+                map.on('zoomend', updateDirectionIndicator);
+                map.on('moveend', updateDirectionIndicator);
 
-                // 지도 이벤트 리스너 추가
-                map.on('zoomend', function() {
-                    console.log('줌 변경됨:', map.getZoom());
-                    updateDirectionIndicator();
-                });
+                // 초기 태양 위치 계산
+                updateSolarPosition();
                 
-                map.on('moveend', function() {
-                    console.log('지도 이동됨');
-                    updateDirectionIndicator();
-                });
-
-                // 지도 로드 완료 이벤트
-                map.whenReady(function() {
-                    console.log('지도 준비 완료!');
-                    // 초기 태양 위치 계산
-                    updateSolarPosition();
-                });
-
-                console.log('지도 초기화 완료!');
-                
+                console.log('지도가 성공적으로 초기화되었습니다.');
             } catch (error) {
                 console.error('지도 초기화 중 오류 발생:', error);
                 document.getElementById('map').innerHTML = 
-                    '<div style="display: flex; flex-direction: column; align-items: center; justify-content: center; height: 100%; background: #f8f9fa; color: #dc3545; font-size: 1.2rem; text-align: center; padding: 20px;">' +
-                    '<div style="font-size: 2rem; margin-bottom: 10px;">⚠️</div>' +
-                    '<div>지도 로드 중 오류가 발생했습니다.</div>' +
-                    '<div style="font-size: 0.9rem; margin-top: 10px;">페이지를 새로고침하거나 잠시 후 다시 시도해주세요.</div>' +
-                    '<button onclick="location.reload()" style="margin-top: 15px; padding: 10px 20px; background: #007bff; color: white; border: none; border-radius: 5px; cursor: pointer;">새로고침</button>' +
+                    '<div style="display: flex; align-items: center; justify-content: center; height: 100%; background: #f8f9fa; color: #dc3545; font-size: 1.2rem;">' +
+                    '지도 로드 중 오류가 발생했습니다. 페이지를 새로고침해 주세요.' +
                     '</div>';
             }
         }
@@ -636,67 +570,49 @@
             }
         }
 
-        // 태양 방향 표시기 업데이트 (완전히 새로 작성된 버전)
+        // 태양 방향 표시기 업데이트 (수정된 버전)
         function updateDirectionIndicator() {
-            const indicator = document.getElementById('directionIndicator');
-            const arrow = document.getElementById('arrow');
-            
-            // 디버그 로그
-            console.log('updateDirectionIndicator 호출됨');
-            console.log('map:', !!map, 'solarMarker:', !!solarMarker);
-            
             if (!map || !solarMarker) {
-                console.log('map 또는 solarMarker가 없음 - 표시기 숨김');
-                indicator.style.display = 'none';
+                document.getElementById('directionIndicator').style.display = 'none';
                 return;
             }
 
             const zoom = map.getZoom();
-            console.log('현재 줌 레벨:', zoom);
+            const indicator = document.getElementById('directionIndicator');
+            const arrow = document.getElementById('arrow');
 
             // 줌 레벨이 8 이상일 때만 표시
             if (zoom >= 8) {
-                try {
-                    const mapCenter = map.getCenter();
-                    const solarPos = solarMarker.getLatLng();
-                    const bounds = map.getBounds();
+                const mapCenter = map.getCenter();
+                const solarPos = solarMarker.getLatLng();
+                const bounds = map.getBounds();
 
-                    console.log('지도 중심:', mapCenter.lat, mapCenter.lng);
-                    console.log('태양 위치:', solarPos.lat, solarPos.lng);
-                    console.log('태양이 화면 안에 있나?', bounds.contains(solarPos));
-
-                    // 태양이 현재 뷰포트에 있는지 확인
-                    if (bounds.contains(solarPos)) {
-                        console.log('태양이 화면 안에 있음 - 표시기 숨김');
-                        indicator.style.display = 'none';
-                        return;
-                    }
-
-                    // 간단한 방향 계산 (더 직관적인 방법)
-                    const latDiff = solarPos.lat - mapCenter.lat;
-                    const lngDiff = solarPos.lng - mapCenter.lng;
-                    
-                    // atan2를 사용해 각도 계산 (라디안을 도로 변환)
-                    let angle = Math.atan2(lngDiff, latDiff) * 180 / Math.PI;
-                    
-                    // 0-360도 범위로 정규화
-                    if (angle < 0) angle += 360;
-                    
-                    console.log('계산된 각도:', angle, '도');
-                    console.log('latDiff:', latDiff, 'lngDiff:', lngDiff);
-
-                    // 화살표 회전 (CSS transform 직접 적용)
-                    arrow.style.transform = `rotate(${angle}deg)`;
-                    indicator.style.display = 'block';
-                    
-                    console.log('방향 표시기 표시됨, 각도:', angle);
-                    
-                } catch (error) {
-                    console.error('방향 계산 중 오류:', error);
+                // 태양이 현재 뷰포트에 있는지 확인
+                if (bounds.contains(solarPos)) {
                     indicator.style.display = 'none';
+                    return;
                 }
+
+                // 태양 방향 계산 (베어링)
+                const centerLat = mapCenter.lat * Math.PI / 180;
+                const centerLng = mapCenter.lng * Math.PI / 180;
+                const solarLat = solarPos.lat * Math.PI / 180;
+                const solarLng = solarPos.lng * Math.PI / 180;
+
+                const dLng = solarLng - centerLng;
+                const y = Math.sin(dLng) * Math.cos(solarLat);
+                const x = Math.cos(centerLat) * Math.sin(solarLat) - 
+                         Math.sin(centerLat) * Math.cos(solarLat) * Math.cos(dLng);
+
+                let bearing = Math.atan2(y, x) * 180 / Math.PI;
+                bearing = (bearing + 360) % 360;
+
+                // 화살표 회전 및 표시
+                arrow.style.transform = `rotate(${bearing - 90}deg)`; // -90도 보정 (➤가 오른쪽을 가리키므로)
+                indicator.style.display = 'block';
+                
+                console.log(`태양 방향: ${bearing.toFixed(1)}도, 화살표 회전: ${(bearing - 90).toFixed(1)}도`);
             } else {
-                console.log('줌 레벨이 8 미만 - 표시기 숨김');
                 indicator.style.display = 'none';
             }
         }
@@ -719,6 +635,7 @@
             
             // 현지 시간을 UTC로 변환
             const localDateTime = new Date(`${dateInput}T${timeInput}`);
+            // const utcDateTime = new Date(localDateTime.getTime() - (timezoneOffset * 60 * 60 * 1000));
             const utcDateTime = new Date(localDateTime.getTime());
             
             const subSolarPoint = calculateSubSolarPoint(utcDateTime);
@@ -783,11 +700,10 @@
                     </div>
                 `);
                 
-                // 방향 표시기 업데이트 (즉시 실행 + 약간의 지연으로 두 번 실행)
-                updateDirectionIndicator();
+                // 방향 표시기 업데이트 (중요: setTimeout으로 마커 생성 후 실행)
                 setTimeout(() => {
                     updateDirectionIndicator();
-                }, 200);
+                }, 100);
                 
             } catch (error) {
                 console.error('태양 마커 업데이트 중 오류:', error);
@@ -874,10 +790,8 @@
             updateSolarPosition();
         }
 
-        // Enter 키로 주소 검색 및 초기화
+        // Enter 키로 주소 검색
         document.addEventListener('DOMContentLoaded', function() {
-            console.log('DOM 로드 완료');
-            
             // 현재 날짜와 시간으로 초기값 설정
             const now = new Date();
             document.getElementById('dateInput').value = now.toISOString().slice(0, 10);
@@ -890,8 +804,24 @@
                 }
             });
             
-            // Leaflet 라이브러리 체크 및 초기화
-            checkLeafletAndInit();
+            // Leaflet 라이브러리가 로드되었는지 확인
+            if (typeof L !== 'undefined') {
+                initMap();
+            } else {
+                // Leaflet이 아직 로드되지 않았다면 잠시 대기
+                setTimeout(function() {
+                    if (typeof L !== 'undefined') {
+                        initMap();
+                    } else {
+                        console.error('Leaflet 라이브러리를 로드할 수 없습니다.');
+                        // 대체 메시지 표시
+                        document.getElementById('map').innerHTML = 
+                            '<div style="display: flex; align-items: center; justify-content: center; height: 100%; background: #f8f9fa; color: #6c757d; font-size: 1.2rem;">' +
+                            '지도를 로드하는 중입니다... 잠시만 기다려 주세요.' +
+                            '</div>';
+                    }
+                }, 1000);
+            }
         });
     </script>
 </body>
