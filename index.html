@@ -366,6 +366,7 @@
         let animationInterval;
         let isAnimating = false;
         let mapInitialized = false;
+        let arrowIndicator = null; // 화살표 마커를 저장할 변수
 
         // Leaflet 라이브러리 로드 확인 및 재시도
         function checkLeafletAndInit() {
@@ -433,6 +434,13 @@
                     console.log('지도 준비 완료!');
                     // 초기 태양 위치 계산
                     updateSolarPosition();
+
+                    // 지도 이동 및 줌 변경 시 화살표 업데이트
+                    map.on('moveend zoomend', function() {
+                        if (solarMarker) {
+                            updateArrowIndicator(solarMarker.getLatLng());
+                        }
+                    });
                 });
 
                 console.log('지도 초기화 완료!');
@@ -695,6 +703,9 @@
                 solarMarker = L.marker([subSolarPoint.latitude, subSolarPoint.longitude], {
                     icon: customIcon
                 }).addTo(map);
+
+                // 마커가 업데이트될 때마다 화살표 인디케이터도 업데이트
+                updateArrowIndicator(solarMarker.getLatLng());
                 
                 // 팝업 추가
                 solarMarker.bindPopup(`
@@ -713,6 +724,101 @@
                 
             } catch (error) {
                 console.error('태양 마커 업데이트 중 오류:', error);
+            }
+        }
+
+        // 태양 직하점 위치에 따라 화살표 인디케이터를 업데이트하는 함수
+        function updateArrowIndicator(solarLatLng) {
+            if (!map || !solarLatLng) return;
+
+            const mapBounds = map.getBounds();
+            const isSolarPointVisible = mapBounds.contains(solarLatLng);
+
+            // 기존 화살표 인디케이터 제거
+            if (arrowIndicator) {
+                map.removeLayer(arrowIndicator);
+                arrowIndicator = null;
+            }
+
+            if (!isSolarPointVisible) {
+                // 태양 직하점이 화면 밖에 있을 경우 화살표 표시
+                const mapDiv = map.getContainer();
+                const mapWidth = mapDiv.clientWidth;
+                const mapHeight = mapDiv.clientHeight;
+
+                // 지도의 중심점 (화면 컨테이너 기준)
+                const centerPoint = L.point(mapWidth / 2, mapHeight / 2);
+                // 태양 직하점의 화면 컨테이너 좌표
+                const solarPoint = map.latLngToContainerPoint(solarLatLng);
+
+                // 중심점에서 태양 직하점 방향으로의 벡터
+                const dx = solarPoint.x - centerPoint.x;
+                const dy = solarPoint.y - centerPoint.y;
+
+                // 각도 계산 (라디안)
+                // Math.atan2(y, x)는 -PI에서 PI 사이의 값을 반환 (오른쪽이 0, 위쪽이 PI/2)
+                let angleRad = Math.atan2(dy, dx); // dy는 아래로 갈수록 증가 (y축이 반전된 웹 좌표계)
+                
+                // 각도를 0-2PI (0-360도) 범위로 조정
+                if (angleRad < 0) angleRad += 2 * Math.PI;
+
+                // 화살표를 배치할 경계선과의 교점 찾기
+                // 맵의 중심을 (0,0)으로 하는 가상의 좌표계에서 교점을 찾고 다시 원래 좌표계로 변환
+                const halfWidth = mapWidth / 2;
+                const halfHeight = mapHeight / 2;
+
+                let t = 1; // 파라미터 t (교점 계산에 사용)
+
+                // 수직 경계 (좌/우)
+                if (Math.abs(dx) * halfHeight > Math.abs(dy) * halfWidth) { // x축에 더 가까운 경우 (좌우 경계에 먼저 닿음)
+                    t = halfWidth / Math.abs(dx);
+                } else { // y축에 더 가까운 경우 (상하 경계에 먼저 닿음)
+                    t = halfHeight / Math.abs(dy);
+                }
+                
+                // 화살표를 테두리 안쪽으로 배치할 픽셀 여백
+                const padding = 50; // 픽셀 단위, 원하는 만큼 조절하세요. (예: 20px)
+
+                let finalIntersectX = centerPoint.x + dx * t;
+                let finalIntersectY = centerPoint.y + dy * t;
+                
+                // 경계선 안쪽으로 패딩 적용
+                if (finalIntersectX < padding) finalIntersectX = padding;
+                if (finalIntersectX > mapWidth - padding) finalIntersectX = mapWidth - padding;
+                if (finalIntersectY < padding) finalIntersectY = padding;
+                if (finalIntersectY > mapHeight - padding) finalIntersectY = mapHeight - padding;
+
+                const intersectPoint = L.point(finalIntersectX, finalIntersectY);
+
+                // 화살표 아이콘 생성 (회전 가능하도록 CSS transform 사용)
+                // 아이콘의 기본 방향은 위쪽(북쪽)을 향한다고 가정하고, 계산된 angleRad에 따라 회전
+                // Math.atan2는 +x축을 0도로 반시계 방향으로 증가.
+                // CSS rotate(Ndeg)는 시계 방향으로 증가.
+                // 따라서 angleRad를 -angleRad로 변환하고, 90도를 더해 화살표가 가리키는 방향을 조정
+                const rotationDeg = (angleRad * 180 / Math.PI) + 90; // 시계 방향 회전으로 변환
+
+                const arrowIcon = L.divIcon({
+                    className: 'arrow-indicator',
+                    html: `<div style="
+                        position: relative;
+                        width: 0;
+                        height: 0;
+                        border-left: 10px solid transparent;
+                        border-right: 10px solid transparent;
+                        border-bottom: 20px solid #feca57; /* 화살표 색상 */
+                        transform-origin: 50% 100%; /* 하단을 중심으로 회전 */
+                        transform: rotate(${rotationDeg}deg); /* 계산된 각도로 회전 */
+                        box-shadow: 0 0 5px rgba(0,0,0,0.3);
+                    "></div>`,
+                    iconSize: [20, 20],
+                    iconAnchor: [10, 10] // 아이콘의 중심점
+                });
+
+                // 교점 위치에 화살표 마커 추가
+                arrowIndicator = L.marker(map.containerPointToLatLng(intersectPoint), {
+                    icon: arrowIcon,
+                    interactive: false // 클릭 불가능하게 설정
+                }).addTo(map);
             }
         }
 
